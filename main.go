@@ -1,9 +1,9 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/go-co-op/gocron"
@@ -21,7 +21,7 @@ func runTask(bot *tgbotapi.BotAPI, user *User) {
 		if user.HasError {
 			return
 		}
-		sendMessage(bot, user.TelegramID, fmt.Sprintf("Unable to authenticate with your token.\nRaw error: %v", err.Error()))
+		sendMessage(bot, user.TelegramID, tokenErrorMessage(user))
 		user.HasError = true
 		user.Save()
 		return
@@ -31,6 +31,13 @@ func runTask(bot *tgbotapi.BotAPI, user *User) {
 	if user.HasError {
 		user.HasError = false
 		user.Save()
+	}
+
+	// Load the logged in user informations
+	gitUser, _, err := git.Users.CurrentUser()
+	if err != nil {
+		sendMessage(bot, user.TelegramID, tokenErrorMessage(user))
+		return
 	}
 
 	// Load the Projects
@@ -44,23 +51,27 @@ func runTask(bot *tgbotapi.BotAPI, user *User) {
 	}
 
 	// Get commit and issue updates on every project
+	tmpTime := time.Now()
+	var wg sync.WaitGroup
 	for _, project := range projects {
-		sendCommitUpdate(bot, user, git, project)
-		sendIssueUpdate(bot, user, git, project)
+		wg.Add(2)
+		go sendCommitUpdate(bot, git, user, gitUser, project, &wg)
+		go sendIssueUpdate(bot, git, user, gitUser, project, &wg)
 	}
+	wg.Wait()
 
-	user.LastChecked = time.Now()
+	user.LastChecked = tmpTime
 	user.Save()
 }
 
 func runTasks(bot *tgbotapi.BotAPI) {
-	log.Print("[Info] Run background job")
 
 	// Load all users
 	users, err := LoadAllUsers()
 	if err != nil {
-		log.Println("[Error] Unable to load users from disk.")
+		log.Println("[Error] Unable to load users from disk for background job.")
 	}
+	log.Printf("[Info] Run background job for %v users", len(users))
 
 	// Run the task for every user
 	for _, user := range users {

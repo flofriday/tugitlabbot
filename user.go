@@ -11,11 +11,14 @@ import (
 
 const dbFile string = "data.db"
 
+// NOTE: Dear developer only add new fields AT THE EMD to avoid breaking the
+// code.
 const (
 	UserSetup int = iota
 	UserNormal
 )
 
+// The Usertype specifies what a user of this bot is
 type User struct {
 	TelegramID  int64
 	GitLabToken string
@@ -24,6 +27,8 @@ type User struct {
 	State       int
 }
 
+// Setup the database on the disk.
+// This function must be called before using any other function from this file!
 func InitUsers() error {
 	db, err := bolt.Open(dbFile, 0600, nil)
 	if err != nil {
@@ -38,6 +43,7 @@ func InitUsers() error {
 	return err
 }
 
+// Create a new user and save it to Disk
 func NewUser(telegramID int64) (User, error) {
 	u := User{
 		TelegramID:  telegramID,
@@ -49,6 +55,7 @@ func NewUser(telegramID int64) (User, error) {
 	return u, err
 }
 
+// Load a user from disk with a specified id
 func LoadUser(telegramID int64) (User, error) {
 	// Open the database
 	db, err := bolt.Open(dbFile, 0600, nil)
@@ -57,12 +64,12 @@ func LoadUser(telegramID int64) (User, error) {
 	}
 
 	// Start a read transaction and close the database
-	var rawJson []byte
+	var rawJSON []byte
 	err = db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("Users"))
 		v := b.Get([]byte(strconv.FormatInt(telegramID, 10)))
-		rawJson = make([]byte, len(v))
-		copy(rawJson, v)
+		rawJSON = make([]byte, len(v))
+		copy(rawJSON, v)
 		return nil
 	})
 	db.Close()
@@ -72,8 +79,11 @@ func LoadUser(telegramID int64) (User, error) {
 
 	// Decode the json
 	user := User{}
-	err = json.Unmarshal(rawJson, &user)
+	err = json.Unmarshal(rawJSON, &user)
 	if err != nil {
+
+		// Since we can't parse the json, we asume that the user doeesn't
+		// exist so we try to create it
 		user, err := NewUser(telegramID)
 		if err != nil {
 			log.Print("[Error] Unable to create new user")
@@ -87,6 +97,7 @@ func LoadUser(telegramID int64) (User, error) {
 	return user, nil
 }
 
+// Load all user
 func LoadAllUsers() ([]User, error) {
 	// Open the database
 	db, err := bolt.Open(dbFile, 0600, nil)
@@ -128,9 +139,10 @@ func LoadAllUsers() ([]User, error) {
 	return users, err
 }
 
+// Save the current User to Disk
 func (u *User) Save() error {
 	// Create the json
-	rawJson, err := json.Marshal(u)
+	rawJSON, err := json.Marshal(u)
 	if err != nil {
 		return err
 	}
@@ -145,7 +157,7 @@ func (u *User) Save() error {
 	// Start the transaction
 	err = db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("Users"))
-		err := b.Put([]byte(strconv.FormatInt(u.TelegramID, 10)), rawJson)
+		err := b.Put([]byte(strconv.FormatInt(u.TelegramID, 10)), rawJSON)
 		return err
 	})
 	if err != nil {

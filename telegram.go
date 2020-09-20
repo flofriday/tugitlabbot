@@ -4,14 +4,22 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
-	"unicode/utf8"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 	"github.com/xanzy/go-gitlab"
 )
 
-func sendCommitUpdate(bot *tgbotapi.BotAPI, user *User, git *gitlab.Client, project *gitlab.Project) {
+const (
+	descriptionLimit = 150
+)
+
+func sendCommitUpdate(bot *tgbotapi.BotAPI, git *gitlab.Client, user *User, gitUser *gitlab.User, project *gitlab.Project, wg *sync.WaitGroup) {
+	// Update the waitgroup
+	defer wg.Done()
+
+	// Load commits from the project since the last time checked
 	commits, _, err := git.Commits.ListCommits(project.ID,
 		&gitlab.ListCommitsOptions{Since: &user.LastChecked})
 	if err != nil {
@@ -19,26 +27,29 @@ func sendCommitUpdate(bot *tgbotapi.BotAPI, user *User, git *gitlab.Client, proj
 		return
 	}
 
+	// Send a message for every commit
 	for _, commit := range commits {
-		if commit.CreatedAt.Before(user.LastChecked) {
+		// Ignore commits already sent
+		// Ignore commits from the logged in user
+		if commit.CreatedAt.Before(user.LastChecked) ||
+			commit.AuthorEmail == gitUser.Email {
 			continue
 		}
 
-		description := ""
-		if len([]rune(commit.Message)) > 50 {
-			description = string([]rune(commit.Message)[:47]) + "..."
-		} else {
-			description = commit.Message
-		}
-
+		description := cutString(commit.Message, descriptionLimit)
 		message := fmt.Sprintf("New Commit 🖥\n*%v*\n%v <%v>\n%v\n%v",
-			commit.Title, commit.AuthorName, commit.AuthorEmail, description, commit.WebURL)
+			commit.Title, commit.AuthorName, commit.AuthorEmail,
+			description, commit.WebURL)
 
 		sendMessage(bot, user.TelegramID, message)
 	}
 }
 
-func sendIssueUpdate(bot *tgbotapi.BotAPI, user *User, git *gitlab.Client, project *gitlab.Project) {
+func sendIssueUpdate(bot *tgbotapi.BotAPI, git *gitlab.Client, user *User, gitUser *gitlab.User, project *gitlab.Project, wg *sync.WaitGroup) {
+	// Update the waitgroup
+	defer wg.Done()
+
+	// Load the commit since the last time we checked
 	issues, _, err := git.Issues.ListProjectIssues(project.ID,
 		&gitlab.ListProjectIssuesOptions{CreatedAfter: &user.LastChecked})
 	if err != nil {
@@ -46,19 +57,15 @@ func sendIssueUpdate(bot *tgbotapi.BotAPI, user *User, git *gitlab.Client, proje
 		return
 	}
 
+	// Send a message for every commit
 	for _, issue := range issues {
+		// Ignore commits we already notified the user about
 		if issue.CreatedAt.Before(user.LastChecked) {
 			continue
 		}
 
-		description := ""
-		if len([]rune(issue.Description)) > 50 {
-			description = string([]rune(issue.Description)[:47]) + "..."
-		} else {
-			description = issue.Description
-		}
-
-		message := fmt.Sprintf("New Issue 📨\n*%v*\n%v\n%v\n%v",
+		description := cutString(issue.Description, descriptionLimit)
+		message := fmt.Sprintf("New Issue ✉️\n*%v*\n%v\n%v\n%v",
 			issue.Title, issue.Author.Name, description, issue.WebURL)
 
 		sendMessage(bot, user.TelegramID, message)
@@ -75,8 +82,6 @@ func handleUpdate(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
 	switch cmd {
 	case "start":
 		startCmd(bot, update)
-	case "help":
-		helpCmd(bot, update)
 	case "userinfo":
 		userInfoCmd(bot, update)
 	case "projects":
@@ -89,6 +94,10 @@ func handleUpdate(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
 		statisticCmd(bot, update)
 	case "privacy":
 		privacyCmd(bot, update)
+	case "about":
+		aboutCmd(bot, update)
+	case "help":
+		helpCmd(bot, update)
 	default:
 		message := "😅 Sorry, I didn't understand that.\nYou can type /help to see what I can understand."
 		sendMessage(bot, update.Message.Chat.ID, message)
@@ -110,13 +119,13 @@ func handleMessage(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
 	token := strings.TrimSpace(update.Message.Text)
 	git, err := gitlab.NewClient(token, gitlab.WithBaseURL("https://b3.complang.tuwien.ac.at/"))
 	if err != nil {
-		sendMessage(bot, user.TelegramID, "⚠️ Unable to verify with this token\nPlease retry")
+		sendMessage(bot, user.TelegramID, tokenErrorMessage(&user))
 		return
 	}
 
 	gitUser, _, err := git.Users.CurrentUser()
 	if err != nil {
-		sendMessage(bot, user.TelegramID, "⚠️ Unable to verify with this token\nPlease retry")
+		sendMessage(bot, user.TelegramID, tokenErrorMessage(&user))
 		return
 	}
 
@@ -124,14 +133,18 @@ func handleMessage(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
 	user.GitLabToken = token
 	user.HasError = false
 	user.State = UserNormal
-	user.LastChecked = time.Now().Add(-30 * time.Minute)
+	user.LastChecked = time.Now()
 	err = user.Save()
 	if err != nil {
-		sendMessage(bot, user.TelegramID, "⚠️ *Internal Error* ⚠️\nPlease retry later")
+		sendMessage(bot, user.TelegramID, "⚠️ *Internal Error* ⚠️\n"+
+			"Please retry later")
 		return
 	}
 
-	message := fmt.Sprintf("*Hi %v* 👋\nThis token works. 👍\nYou can delete it any time with the /deleteGitlabToken command.", gitUser.Name)
+	message := fmt.Sprintf("*Hi %v* 👋\nThis token works. "+
+		"👍\nYou can delete it any time with the /deleteGitlabToken command. "+
+		"I will notify you as soon as something happens on your repos.",
+		gitUser.Name)
 	sendMessage(bot, user.TelegramID, message)
 
 	// Send the user a info about the project the are subscribed to
@@ -139,6 +152,7 @@ func handleMessage(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
 }
 
 func projectsCmd(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
+	// Load the user from disk
 	user, err := LoadUser(update.Message.Chat.ID)
 	if err != nil {
 		log.Printf("[Warning] Unable to load user: %s", err.Error())
@@ -146,15 +160,27 @@ func projectsCmd(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
 		return
 	}
 
+	// Check if the user even has a token.
+	if user.GitLabToken == "" {
+		message := "Sorry, I need a GitLabToken for this command to work. 😅\n" +
+			"You can set a token with /setGitLabToken."
+		sendMessage(bot, user.TelegramID, message)
+		return
+	}
+
+	// Create a GitLab client
 	git, err := gitlab.NewClient(user.GitLabToken, gitlab.WithBaseURL("https://b3.complang.tuwien.ac.at/"))
 	if err != nil {
 		log.Printf("[Error] Unable to authenticate for user %v: %v", user.TelegramID, err.Error())
+		sendMessage(bot, user.TelegramID, tokenErrorMessage(&user))
+		return
+	}
 
-		// Send a error message to the user if not already sent
-		if user.HasError {
-			return
-		}
-		sendMessage(bot, user.TelegramID, fmt.Sprintf("Unable to authenticate with your token.\nRaw error: %v", err.Error()))
+	// Try to get the current user to ensure we are logged in, as this
+	// is only available for voalid tokens
+	_, _, err = git.Users.CurrentUser()
+	if err != nil {
+		sendMessage(bot, user.TelegramID, tokenErrorMessage(&user))
 		user.HasError = true
 		user.Save()
 		return
@@ -166,15 +192,15 @@ func projectsCmd(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
 	}
 	projects, _, err := git.Projects.ListProjects(options)
 	if err != nil {
+		sendMessage(bot, update.Message.Chat.ID, "⚠️ *Internal Error* ⚠️\nPlease retry later")
 		log.Printf("[Warning] Unable to load projects for user %v: %v", user.TelegramID, err)
 		return
 	}
 
+	// Create the message
 	message := fmt.Sprintf("*Subscribed Project*\n"+
-		"You are subscribed to the project you starred. "+
+		"You are subscribed to the project you have starred. "+
 		"At the moment this are %v projects.\n\n", len(projects))
-
-	// Get commit and issue updates on every project
 	for i, project := range projects {
 		message += fmt.Sprintf("*%v)* %v\n%v\n\n", i+1, project.NameWithNamespace, project.WebURL)
 	}
@@ -183,14 +209,8 @@ func projectsCmd(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
 }
 
 func startCmd(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
-	setGitlabTokenCmd(bot, update)
-}
+	aboutCmd(bot, update)
 
-func helpCmd(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
-	sendMessage(bot, update.Message.Chat.ID, "😰 Not yet implemented")
-}
-
-func userInfoCmd(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
 	user, err := LoadUser(update.Message.Chat.ID)
 	if err != nil {
 		log.Printf("[Warning] Unable to load user: %s", err.Error())
@@ -198,14 +218,50 @@ func userInfoCmd(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
 		return
 	}
 
-	tokenText := user.GitLabToken
-	if utf8.RuneCountInString(tokenText) > 5 {
-		tmpRunes := []rune(tokenText)
-
-		tokenText = string(tmpRunes[:5]) +
-			strings.Repeat("*", len(tmpRunes)-5)
-		log.Print(tokenText)
+	if user.GitLabToken == "" {
+		setGitlabTokenCmd(bot, update)
 	}
+}
+
+func aboutCmd(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
+	message := "🎉 *TUGitLabBot* 🎉\n" +
+		"This bot sends you messages if new issues or commits get created on your " +
+		"TU GitLab repositories.\nThis bot was created by " +
+		"[@flofriday](https://github.com/flofriday) in the hope to be useful " +
+		"and its code is publicly available at: " +
+		"https://github.com/flofriday/tugitlabbot" +
+		"\n\n" +
+		"You can find a list with all commands with the /help command." +
+		"\n\n" +
+		"*Disclaimer:* This is not an official offer from TU Wien!"
+	sendMessage(bot, update.Message.Chat.ID, message)
+}
+
+func helpCmd(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
+	message := "*Help*\n" +
+		"/projects - List the project you are subscribed to\n" +
+		"/setgitlabtoken - Set your GitLab token\n" +
+		"/deletegitlabtoken - Delete your GitLab token\n" +
+		"/userinfo - Show all the info this bot has about you\n" +
+		"/statistic - Show statistics about the bot\n" +
+		"/privacy - How this bot handles privacy\n" +
+		"/about - About this bot\n" +
+		"/help - This help message\n"
+
+	sendMessage(bot, update.Message.Chat.ID, message)
+}
+
+func userInfoCmd(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
+	// Load the user from disk
+	user, err := LoadUser(update.Message.Chat.ID)
+	if err != nil {
+		log.Printf("[Warning] Unable to load user: %s", err.Error())
+		sendMessage(bot, update.Message.Chat.ID, "⚠️ *Internal Error* ⚠️\nPlease retry later")
+		return
+	}
+
+	// Censor the GitLabToken and convert the userstate into something readable
+	tokenText := censorString(user.GitLabToken)
 	if tokenText == "" {
 		tokenText = "<no token>"
 	}
@@ -216,6 +272,7 @@ func userInfoCmd(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
 		stateText = "Normal"
 	}
 
+	// Send the message
 	message := fmt.Sprintf("*User Info*\n"+"TelegramID: `%v`\n"+
 		"GitLab Token: `%v`\n"+"Has Error: %v\n"+"State: %v\n"+"Last updated: %v\n",
 		user.TelegramID, tokenText, user.HasError, stateText, user.LastChecked.Format(time.RFC1123))
@@ -264,7 +321,33 @@ func deleteGitlabTokenCmd(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
 }
 
 func statisticCmd(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
-	sendMessage(bot, update.Message.Chat.ID, "😰 Not yet implemented")
+	// Load all users from disk
+	users, err := LoadAllUsers()
+	if err != nil {
+		log.Printf("[Warning] Unable to load all user: %s", err.Error())
+		sendMessage(bot, update.Message.Chat.ID, "⚠️ *Internal Error* ⚠️\nPlease retry later")
+		return
+	}
+
+	// Load some statistics
+	numErrors := 0
+	numTokens := 0
+	numUsers := len(users)
+	for _, user := range users {
+		if user.HasError {
+			numErrors++
+		}
+		if user.GitLabToken != "" {
+			numTokens++
+		}
+	}
+
+	// Create a message
+	message := fmt.Sprintf("*Statistic*\nUser: %v\n"+
+		"User with Token:: %v\n"+
+		"User with Error: %v",
+		numUsers, numTokens, numErrors)
+	sendMessage(bot, update.Message.Chat.ID, message)
 }
 
 func privacyCmd(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
