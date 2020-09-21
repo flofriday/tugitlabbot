@@ -12,5 +12,6 @@ RUN CGO_ENABLE=0 go build -o gitlabbot
 
 # Define the start point of the container
 FROM alpine
+WORKDIR /app
 COPY --from=builder /app/gitlabbot ./
 CMD ["./gitlabbot"]
