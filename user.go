@@ -9,7 +9,7 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-const dbFile string = "data.db"
+const dbFile string = "data/data.db"
 
 // NOTE: Dear developer only add new fields AT THE EMD to avoid breaking the
 // code.

@@ -3,3 +3,4 @@ accesstoken.txt
 data.db
 gitlabbot
 run.sh
+.DS_Store

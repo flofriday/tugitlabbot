@@ -1,0 +1,14 @@
+.gitignore
+.gitlab-ci.yml
+accesstoken.txt
+data.db
+Dockerfile
+gitlabbot
+gitlabbot.exe
+LICENSE
+logo.png
+README.md
+run.sh
+screenshot.png
+tugitlabbot
+tugitlabbot.exe

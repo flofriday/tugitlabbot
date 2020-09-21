@@ -65,7 +65,6 @@ func runTask(bot *tgbotapi.BotAPI, user *User) {
 }
 
 func runTasks(bot *tgbotapi.BotAPI) {
-
 	// Load all users
 	users, err := LoadAllUsers()
 	if err != nil {
