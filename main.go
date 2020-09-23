@@ -94,6 +94,7 @@ func runTasks(bot *tgbotapi.BotAPI) {
 			runTask(bot, &user)
 		}(bot, user)
 	}
+	wg.Wait()
 	log.Printf("[Info] Completed background job for %v users", counter)
 }
 
