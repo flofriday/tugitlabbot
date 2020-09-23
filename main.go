@@ -55,8 +55,14 @@ func runTask(bot *tgbotapi.BotAPI, user *User) {
 	var wg sync.WaitGroup
 	for _, project := range projects {
 		wg.Add(2)
-		go sendCommitUpdate(bot, git, user, gitUser, project, &wg)
-		go sendIssueUpdate(bot, git, user, gitUser, project, &wg)
+		go func(bot *tgbotapi.BotAPI, git *gitlab.Client, user *User, gitUser *gitlab.User, project *gitlab.Project) {
+			defer wg.Done()
+			sendCommitUpdate(bot, git, user, gitUser, project)
+		}(bot, git, user, gitUser, project)
+		go func(bot *tgbotapi.BotAPI, git *gitlab.Client, user *User, gitUser *gitlab.User, project *gitlab.Project) {
+			defer wg.Done()
+			sendIssueUpdate(bot, git, user, gitUser, project)
+		}(bot, git, user, gitUser, project)
 	}
 	wg.Wait()
 
@@ -70,17 +76,25 @@ func runTasks(bot *tgbotapi.BotAPI) {
 	if err != nil {
 		log.Println("[Error] Unable to load users from disk for background job.")
 	}
-	log.Printf("[Info] Run background job for %v users", len(users))
+	log.Print("[Info] Run background job...")
 
 	// Run the task for every user
+	var wg sync.WaitGroup
+	counter := 0
 	for _, user := range users {
 		// Ignore users that don't have a GitLab Token
 		if user.GitLabToken == "" {
 			continue
 		}
 
-		go runTask(bot, &user)
+		counter++
+		wg.Add(1)
+		go func(bot *tgbotapi.BotAPI, user User) {
+			defer wg.Done()
+			runTask(bot, &user)
+		}(bot, user)
 	}
+	log.Printf("[Info] Completed background job for %v users", counter)
 }
 
 func main() {

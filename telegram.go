@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"sync"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
@@ -15,10 +14,7 @@ const (
 	descriptionLimit = 150
 )
 
-func sendCommitUpdate(bot *tgbotapi.BotAPI, git *gitlab.Client, user *User, gitUser *gitlab.User, project *gitlab.Project, wg *sync.WaitGroup) {
-	// Update the waitgroup
-	defer wg.Done()
-
+func sendCommitUpdate(bot *tgbotapi.BotAPI, git *gitlab.Client, user *User, gitUser *gitlab.User, project *gitlab.Project) {
 	// Load commits from the project since the last time checked
 	commits, _, err := git.Commits.ListCommits(project.ID,
 		&gitlab.ListCommitsOptions{Since: &user.LastChecked})
@@ -45,10 +41,7 @@ func sendCommitUpdate(bot *tgbotapi.BotAPI, git *gitlab.Client, user *User, gitU
 	}
 }
 
-func sendIssueUpdate(bot *tgbotapi.BotAPI, git *gitlab.Client, user *User, gitUser *gitlab.User, project *gitlab.Project, wg *sync.WaitGroup) {
-	// Update the waitgroup
-	defer wg.Done()
-
+func sendIssueUpdate(bot *tgbotapi.BotAPI, git *gitlab.Client, user *User, gitUser *gitlab.User, project *gitlab.Project) {
 	// Load the commit since the last time we checked
 	issues, _, err := git.Issues.ListProjectIssues(project.ID,
 		&gitlab.ListProjectIssuesOptions{CreatedAfter: &user.LastChecked})
@@ -272,10 +265,17 @@ func userInfoCmd(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
 		stateText = "Normal"
 	}
 
+	// Time defaults to 1970 which means if the time is before 1980 we now it
+	// nas never checked
+	timeText := user.LastChecked.Format(time.RFC1123)
+	if user.LastChecked.Before(time.Date(1980, time.January, 0, 0, 0, 0, 0, time.UTC)) {
+		timeText = "_<never>_"
+	}
+
 	// Send the message
 	message := fmt.Sprintf("*User Info*\n"+"TelegramID: `%v`\n"+
 		"GitLab Token: `%v`\n"+"Has Error: %v\n"+"State: %v\n"+"Last updated: %v\n",
-		user.TelegramID, tokenText, user.HasError, stateText, user.LastChecked.Format(time.RFC1123))
+		user.TelegramID, tokenText, user.HasError, stateText, timeText)
 	sendMessage(bot, user.TelegramID, message)
 }
 
@@ -295,7 +295,8 @@ func setGitlabTokenCmd(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
 		}
 	}
 
-	message := "*Gitlab Token*\n1) Go into your GitLab Profile Settings\n" +
+	message := "*Gitlab Token*\n" +
+		"1) Go into your GitLab Profile Settings\n" +
 		"2) Select 'Access Tokens' in the Sidebar left\n" +
 		"3) Create a new token with the scope 'api'\n" +
 		"4) Send me this token\n"
@@ -311,6 +312,8 @@ func deleteGitlabTokenCmd(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
 	}
 
 	user.GitLabToken = ""
+	user.HasError = false
+	user.LastChecked = time.Time{}
 	err = user.Save()
 	if err != nil {
 		sendMessage(bot, user.TelegramID, "⚠️ *Internal Error* ⚠️\nPlease retry later")
@@ -343,15 +346,29 @@ func statisticCmd(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
 	}
 
 	// Create a message
-	message := fmt.Sprintf("*Statistic*\nUser: %v\n"+
-		"User with Token:: %v\n"+
-		"User with Error: %v",
+	message := fmt.Sprintf("*Statistic*\nUsers: %v\n"+
+		"Users with Token: %v\n"+
+		"Users with Error: %v",
 		numUsers, numTokens, numErrors)
 	sendMessage(bot, update.Message.Chat.ID, message)
 }
 
 func privacyCmd(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
-	sendMessage(bot, update.Message.Chat.ID, "😰 Not yet implemented")
+	message := "*Privacy*\n" +
+		"Here is how this bot manages your sensitive data.\n\n" +
+		"While, this bot tries to save as little data as possible about you, " +
+		"it still needs to store somethings to work. To see what exactly the " +
+		"bot knows about you, you can use the /userinfo command." +
+		"\n\n" +
+		"Moreover, I the developer ([@flofriday](https://github.com/flofriday)) " +
+		"promise you to never look into your personal data, nor will your token " +
+		"be used for anything but this bot.\n\n" +
+		"If you however don't trust this bot or its developer, you can run the " +
+		"bot on your own hardware, like a raspberry pi. Here is " +
+		"the sourcecode with an guide to run it: " +
+		"https://github.com/flofriday/tugitlabbot"
+
+	sendMessage(bot, update.Message.Chat.ID, message)
 }
 
 func sendMessage(bot *tgbotapi.BotAPI, telegramID int64, text string) {
