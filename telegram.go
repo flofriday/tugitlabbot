@@ -82,8 +82,10 @@ func handleUpdate(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
 	case "setgitlabtoken":
 		setGitlabTokenCmd(bot, update)
 	case "deletegitlabtoken":
-		setGitlabTokenCmd(bot, update)
+		deleteGitlabTokenCmd(bot, update)
 	case "statistic":
+		statisticCmd(bot, update)
+	case "statistics":
 		statisticCmd(bot, update)
 	case "privacy":
 		privacyCmd(bot, update)
