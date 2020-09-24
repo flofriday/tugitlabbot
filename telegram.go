@@ -260,7 +260,7 @@ func userInfoCmd(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
 	if tokenText == "" {
 		tokenText = "<no token>"
 	}
-	stateText := "_<state not found>_"
+	stateText := "<state not found>"
 	if user.State == UserSetup {
 		stateText = "Waiting for GitLab Token"
 	} else if user.State == UserNormal {
@@ -271,7 +271,7 @@ func userInfoCmd(bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
 	// nas never checked
 	timeText := user.LastChecked.Format(time.RFC1123)
 	if user.LastChecked.Before(time.Date(1980, time.January, 0, 0, 0, 0, 0, time.UTC)) {
-		timeText = "_<never>_"
+		timeText = "`<never>`"
 	}
 
 	// Send the message
